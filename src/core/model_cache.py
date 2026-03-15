@@ -186,8 +186,9 @@ class GlobalModelCache:
             debug: Optional debug instance for logging
             
         Returns:
-            Runner key string (format: "dit_id+vae_id") if cached successfully,
-            None if either ID is None
+            Runner key string (format: "dit_id+vae_id") if this call cached or
+            replaced the template, None if either ID is None or an existing
+            non-tainted template is intentionally kept.
         """
         if dit_id is None or vae_id is None:
             return None
