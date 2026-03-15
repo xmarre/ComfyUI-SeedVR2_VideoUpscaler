@@ -846,26 +846,48 @@ def configure_runner(
     )
     
     # Phase 2: Get or create runner
+    runner = None
     runner = _acquire_runner(
         cache_context, dit_model, vae_model, 
         base_cache_dir, debug
     )
     
-    # Phase 3: Configure runner settings
-    _configure_runner_settings(
-        runner, ctx,
-        encode_tiled, encode_tile_size, encode_tile_overlap,
-        decode_tiled, decode_tile_size, decode_tile_overlap,
-        tile_debug, attention_mode,
-        torch_compile_args_dit, torch_compile_args_vae,
-        block_swap_config, debug
-    )
-    
-    # Phase 4: Setup models (load from cache or create new)
-    _setup_models(
-        runner, cache_context, dit_model, vae_model, 
-        base_cache_dir, block_swap_config, debug
-    )
+    try:
+        # Phase 3: Configure runner settings
+        _configure_runner_settings(
+            runner, ctx,
+            encode_tiled, encode_tile_size, encode_tile_overlap,
+            decode_tiled, decode_tile_size, decode_tile_overlap,
+            tile_debug, attention_mode,
+            torch_compile_args_dit, torch_compile_args_vae,
+            block_swap_config, debug
+        )
+        
+        # Phase 4: Setup models (load from cache or create new)
+        _setup_models(
+            runner, cache_context, dit_model, vae_model, 
+            base_cache_dir, block_swap_config, debug
+        )
+    except BaseException:
+        if runner is not None and cache_context.get('reusing_runner', False):
+            runner._seedvr2_runner_tainted = True
+            runner._seedvr2_execution_active = False
+            try:
+                cache_context['global_cache'].remove_runner(
+                    cache_context.get('dit_id'),
+                    cache_context.get('vae_id'),
+                    debug,
+                    expected_runner=runner,
+                )
+            except Exception as cache_error:
+                if debug is not None:
+                    debug.log(
+                        f"Failed to evict claimed runner after setup failure: {cache_error}",
+                        level="WARNING",
+                        category="cleanup",
+                        force=True,
+                    )
+        raise
     
     return runner, cache_context
 
