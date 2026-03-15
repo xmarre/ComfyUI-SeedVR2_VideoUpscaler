@@ -447,6 +447,21 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
             runner._seedvr2_execution_active = True
             runner._seedvr2_runner_tainted = False
 
+            # If both models were already cached but the runner template had been
+            # invalidated or missing, cache this freshly configured runner now.
+            if (
+                cache_context is not None
+                and not cache_context.get('reusing_runner', False)
+                and cache_context.get('cached_dit') is not None
+                and cache_context.get('cached_vae') is not None
+            ):
+                cache_context['global_cache'].set_runner(
+                    cache_context.get('dit_id'),
+                    cache_context.get('vae_id'),
+                    runner,
+                    debug,
+                )
+
             # Store cache context in ctx for use in generation phases
             ctx['cache_context'] = cache_context
 
@@ -592,14 +607,31 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
         except BaseException:
             if runner is not None:
                 runner._seedvr2_runner_tainted = True
-                runner._seedvr2_execution_active = False
 
             if cache_context is not None:
-                cache_context['global_cache'].remove_runner(
-                    cache_context.get('dit_id'),
-                    cache_context.get('vae_id'),
-                    debug,
-                )
+                try:
+                    cache_context['global_cache'].remove_runner(
+                        cache_context.get('dit_id'),
+                        cache_context.get('vae_id'),
+                        debug,
+                    )
+                except Exception as cache_error:
+                    if debug is not None:
+                        debug.log(
+                            f"Failed to evict cached runner while handling prior exception: {cache_error}",
+                            level="WARNING",
+                            category="cleanup",
+                            force=True,
+                        )
 
-            cleanup(dit_cache=dit_cache, vae_cache=vae_cache)
+            try:
+                cleanup(dit_cache=dit_cache, vae_cache=vae_cache)
+            except BaseException as cleanup_error:
+                if debug is not None:
+                    debug.log(
+                        f"Cleanup failed while handling prior exception: {cleanup_error}",
+                        level="WARNING",
+                        category="cleanup",
+                        force=True,
+                    )
             raise

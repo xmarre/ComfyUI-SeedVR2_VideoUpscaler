@@ -11,7 +11,10 @@ import sys
 import time
 import psutil
 import platform
-from typing import Tuple, Dict, Any, Optional, List, Union
+from typing import Tuple, Dict, Any, Optional, List, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..utils.debug import Debug
 
 
 def _device_str(device: Union[torch.device, str]) -> str:
@@ -39,12 +42,18 @@ def synchronize_device(device: Optional[Union[torch.device, str]],
 
     try:
         if device.type == 'cuda' and is_cuda_available():
+            if debug:
+                why = f" ({reason})" if reason else ""
+                debug.log(f"Synchronizing {_device_str(device)}{why}", category="cleanup")
             torch.cuda.synchronize(device)
             if debug:
                 why = f" ({reason})" if reason else ""
                 debug.log(f"Synchronized {_device_str(device)}{why}", category="cleanup")
             return True
         if device.type == 'mps' and is_mps_available():
+            if debug:
+                why = f" ({reason})" if reason else ""
+                debug.log(f"Synchronizing MPS{why}", category="cleanup")
             torch.mps.synchronize()
             if debug:
                 why = f" ({reason})" if reason else ""

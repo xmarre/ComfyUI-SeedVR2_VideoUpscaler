@@ -3,8 +3,11 @@ Global Model Cache for SeedVR2
 Enables independent DiT and VAE model sharing across multiple upscaler node instances
 """
 
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 from ..optimization.memory_manager import release_model_memory
+
+if TYPE_CHECKING:
+    from ..utils.debug import Debug
 
 
 class GlobalModelCache:

@@ -697,7 +697,18 @@ def _acquire_runner(
             cache_context['reusing_runner'] = True
             return template
         else:
-            # Template exists but models changed and no cached models - create new
+            debug.log(
+                f"Cached runner template models no longer match: nodes {runner_key} "
+                f"({current_dit}/{current_vae} -> {dit_model}/{vae_model}); creating a fresh runner",
+                level="WARNING",
+                category="cache",
+                force=True,
+            )
+            cache_context['global_cache'].remove_runner(
+                cache_context['dit_id'],
+                cache_context['vae_id'],
+                debug,
+            )
             return _create_new_runner(dit_model, vae_model, base_cache_dir, debug)
     else:
         # No template - create new runner
