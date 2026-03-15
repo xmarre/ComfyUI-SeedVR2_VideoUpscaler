@@ -267,6 +267,7 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
         # Track execution state in local variables (not instance)
         runner = None
         ctx = None
+        cache_context = None
         pbar = None
         
         # Define progress callback as local closure
@@ -319,8 +320,15 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
             
             # Use complete_cleanup for all cleanup operations
             if runner:
-                complete_cleanup(runner=runner, debug=debug, 
-                               dit_cache=dit_cache, vae_cache=vae_cache)
+                try:
+                    complete_cleanup(
+                        runner=runner,
+                        debug=debug,
+                        dit_cache=dit_cache,
+                        vae_cache=vae_cache,
+                    )
+                finally:
+                    runner._seedvr2_execution_active = False
                 
                 # Delete runner only if neither model is cached
                 if not (dit_cache or vae_cache):
@@ -435,6 +443,9 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
                 torch_compile_args_dit=dit_torch_compile_args,
                 torch_compile_args_vae=vae_torch_compile_args
             )
+
+            runner._seedvr2_execution_active = True
+            runner._seedvr2_runner_tainted = False
 
             # Store cache context in ctx for use in generation phases
             ctx['cache_context'] = cache_context
@@ -568,6 +579,9 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
             # Print footer
             debug.print_footer()
 
+            if runner is not None:
+                runner._seedvr2_runner_tainted = False
+
             debug.clear_history()
             pbar = None
             ctx = None
@@ -575,6 +589,17 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
             # V3-compatible return with optional UI preview
             return io.NodeOutput(sample)
             
-        except Exception as e:
+        except BaseException:
+            if runner is not None:
+                runner._seedvr2_runner_tainted = True
+                runner._seedvr2_execution_active = False
+
+            if cache_context is not None:
+                cache_context['global_cache'].remove_runner(
+                    cache_context.get('dit_id'),
+                    cache_context.get('vae_id'),
+                    debug,
+                )
+
             cleanup(dit_cache=dit_cache, vae_cache=vae_cache)
-            raise e
+            raise

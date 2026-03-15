@@ -145,20 +145,43 @@ class GlobalModelCache:
             debug: Optional debug instance for logging
             
         Returns:
-            Runner key string (format: "dit_id+vae_id") if cached successfully, 
-            None if either ID is None or runner already cached
+            Runner key string (format: "dit_id+vae_id") if cached successfully,
+            None if either ID is None
         """
         if dit_id is None or vae_id is None:
             return None
             
         runner_key = f"{dit_id}+{vae_id}"
-        if runner_key not in self._runner_templates:
+        existing = self._runner_templates.get(runner_key)
+        if existing is runner:
+            return runner_key
+
+        replace_existing = False
+        if existing is not None:
+            replace_existing = getattr(existing, '_seedvr2_runner_tainted', False)
+
+        if existing is None or replace_existing:
             self._runner_templates[runner_key] = runner
             if debug:
-                debug.log(f"Runner template cached in memory: nodes {runner_key}", category="cache", force=True)
+                action = "replaced" if replace_existing else "cached"
+                debug.log(f"Runner template {action} in memory: nodes {runner_key}", category="cache", force=True)
             return runner_key
         
         return None
+
+    def remove_runner(self, dit_id: Optional[int], vae_id: Optional[int],
+                      debug: Optional['Debug'] = None) -> bool:
+        """Remove a cached runner template for the given DiT/VAE node pair."""
+        if dit_id is None or vae_id is None:
+            return False
+
+        runner_key = f"{dit_id}+{vae_id}"
+        if runner_key in self._runner_templates:
+            del self._runner_templates[runner_key]
+            if debug:
+                debug.log(f"Removed cached runner template: nodes {runner_key}", category="cache", force=True)
+            return True
+        return False
     
     def remove_dit(self, dit_config: Dict[str, Any], debug: Optional['Debug'] = None) -> bool:
         """

@@ -664,6 +664,28 @@ def _acquire_runner(
     )
     
     if template:
+        runner_key = f"{cache_context['dit_id']}+{cache_context['vae_id']}"
+
+        if getattr(template, '_seedvr2_execution_active', False):
+            debug.log(
+                f"Cached runner template still marked active: nodes {runner_key}; creating a fresh runner",
+                level="WARNING",
+                category="cache",
+                force=True,
+            )
+            cache_context['global_cache'].remove_runner(cache_context['dit_id'], cache_context['vae_id'], debug)
+            return _create_new_runner(dit_model, vae_model, base_cache_dir, debug)
+
+        if getattr(template, '_seedvr2_runner_tainted', False):
+            debug.log(
+                f"Cached runner template was tainted by a prior failed/interrupted run: nodes {runner_key}; creating a fresh runner",
+                level="WARNING",
+                category="cache",
+                force=True,
+            )
+            cache_context['global_cache'].remove_runner(cache_context['dit_id'], cache_context['vae_id'], debug)
+            return _create_new_runner(dit_model, vae_model, base_cache_dir, debug)
+
         # We have a template - check if we can use it
         current_dit = getattr(template, '_dit_model_name', None)
         current_vae = getattr(template, '_vae_model_name', None)
@@ -671,7 +693,6 @@ def _acquire_runner(
         
         if models_match:
             # Perfect match - reuse template directly
-            runner_key = f"{cache_context['dit_id']}+{cache_context['vae_id']}"
             debug.log(f"Reusing cached runner template: nodes {runner_key}", category="reuse", force=True)
             cache_context['reusing_runner'] = True
             return template
