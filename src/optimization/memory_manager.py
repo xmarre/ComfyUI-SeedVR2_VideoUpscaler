@@ -1328,14 +1328,10 @@ def cleanup_dit(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
                 if debug:
                     debug.log("DiT on MPS - skipping CPU movement before deletion", category="cleanup")
             else:
-                if cache_model:
+                offload_target = getattr(runner, '_dit_offload_device', None)
+                if offload_target is None or offload_target == 'none':
                     offload_target = torch.device('cpu')
-                    reason = "cold-cache normalization"
-                else:
-                    offload_target = getattr(runner, '_dit_offload_device', None)
-                    if offload_target is None or offload_target == 'none':
-                        offload_target = torch.device('cpu')
-                    reason = "releasing GPU memory"
+                reason = "model caching" if cache_model else "releasing GPU memory"
                 manage_model_device(model=runner.dit, target_device=offload_target, model_name="DiT", 
                                    debug=debug, reason=reason, runner=runner)
         elif param_device.type == 'meta' and debug:
@@ -1344,25 +1340,14 @@ def cleanup_dit(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
         pass
     
     # 3. Clean BlockSwap after model movement
-    if runner.dit is not None and (cache_model or getattr(runner, "_blockswap_active", False)):
+    if hasattr(runner, "_blockswap_active") and runner._blockswap_active:
         # Import here to avoid circular dependency
         from .blockswap import cleanup_blockswap
-        cleanup_blockswap(runner=runner, keep_state_for_cache=False)
+        cleanup_blockswap(runner=runner, keep_state_for_cache=cache_model)
 
     if cache_model and runner.dit is not None:
-        cached_dit_before_normalization = runner.dit
-        runner.dit = _normalize_cached_dit_model(runner.dit, debug=debug)
-        dit_cache_node_id = getattr(runner, '_dit_cache_node_id', None)
-        if dit_cache_node_id is not None:
-            from ..core.model_cache import get_global_cache
-            get_global_cache().replace_dit(
-                {'node_id': dit_cache_node_id},
-                runner.dit,
-                debug=debug,
-                expected_model=cached_dit_before_normalization,
-            )
-        if debug:
-            debug.log("DiT cache normalized to cold CPU model state", category="cache", force=True)
+        set_model_cache_cold_state(runner.dit, False)
+        runner._seedvr2_dit_phase_cleaned = True
     
     # 4. Complete cleanup if not caching
     if not cache_model:
@@ -1379,6 +1364,9 @@ def cleanup_dit(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
         if hasattr(runner, '_dit_attention_mode'):
             delattr(runner, '_dit_attention_mode')
     
+    if not cache_model:
+        runner._seedvr2_dit_phase_cleaned = True
+
     # 5. Clear DiT temporary attributes (should be already cleared in materialize_model)
     runner._dit_checkpoint = None
     runner._dit_dtype_override = None
@@ -1427,14 +1415,10 @@ def cleanup_vae(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
                 if debug:
                     debug.log("VAE on MPS - skipping CPU movement before deletion", category="cleanup")
             else:
-                if cache_model:
+                offload_target = getattr(runner, '_vae_offload_device', None)
+                if offload_target is None or offload_target == 'none':
                     offload_target = torch.device('cpu')
-                    reason = "cold-cache normalization"
-                else:
-                    offload_target = getattr(runner, '_vae_offload_device', None)
-                    if offload_target is None or offload_target == 'none':
-                        offload_target = torch.device('cpu')
-                    reason = "releasing GPU memory"
+                reason = "model caching" if cache_model else "releasing GPU memory"
                 manage_model_device(model=runner.vae, target_device=offload_target, model_name="VAE", 
                                    debug=debug, reason=reason, runner=runner)
         elif param_device.type == 'meta' and debug:
@@ -1443,19 +1427,8 @@ def cleanup_vae(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
         pass
 
     if cache_model and runner.vae is not None:
-        cached_vae_before_normalization = runner.vae
-        runner.vae = _normalize_cached_vae_model(runner.vae, debug=debug)
-        vae_cache_node_id = getattr(runner, '_vae_cache_node_id', None)
-        if vae_cache_node_id is not None:
-            from ..core.model_cache import get_global_cache
-            get_global_cache().replace_vae(
-                {'node_id': vae_cache_node_id},
-                runner.vae,
-                debug=debug,
-                expected_model=cached_vae_before_normalization,
-            )
-        if debug:
-            debug.log("VAE cache normalized to cold CPU model state", category="cache", force=True)
+        set_model_cache_cold_state(runner.vae, False)
+        runner._seedvr2_vae_phase_cleaned = True
     
     # 3. Complete cleanup if not caching
     if not cache_model:
@@ -1470,6 +1443,9 @@ def cleanup_vae(runner: Any, debug: Optional['Debug'] = None, cache_model: bool 
         if hasattr(runner, '_vae_tiling_config'):
             delattr(runner, '_vae_tiling_config')
     
+    if not cache_model:
+        runner._seedvr2_vae_phase_cleaned = True
+
     # 3. Clear VAE temporary attributes (should be already cleared in materialize_model)
     runner._vae_checkpoint = None
     runner._vae_dtype_override = None
@@ -1507,10 +1483,12 @@ def complete_cleanup(runner: Any, debug: Optional['Debug'] = None, dit_cache: bo
     # 1. Cleanup any remaining models if they still exist
     # (This handles cases where phases were skipped or errored)
     if hasattr(runner, 'dit') and runner.dit is not None:
-        cleanup_dit(runner=runner, debug=debug, cache_model=dit_cache)
+        if not (dit_cache and getattr(runner, '_seedvr2_dit_phase_cleaned', False)):
+            cleanup_dit(runner=runner, debug=debug, cache_model=dit_cache)
     
     if hasattr(runner, 'vae') and runner.vae is not None:
-        cleanup_vae(runner=runner, debug=debug, cache_model=vae_cache)
+        if not (vae_cache and getattr(runner, '_seedvr2_vae_phase_cleaned', False)):
+            cleanup_vae(runner=runner, debug=debug, cache_model=vae_cache)
     
     # 2. Clear remaining runtime caches
     clear_runtime_caches(runner=runner, debug=debug)

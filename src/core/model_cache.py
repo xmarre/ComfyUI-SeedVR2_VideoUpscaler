@@ -64,14 +64,6 @@ class GlobalModelCache:
         with self._model_cache_lock:
             if node_id in self._dit_models:
                 model, stored_config = self._dit_models[node_id]
-                if not is_model_cache_cold(model):
-                    if debug:
-                        debug.log(
-                            f"Cached DiT is still hot or incomplete; waiting for cold cache state before reuse (node {node_id})",
-                            category="cache",
-                            force=True,
-                        )
-                    return None
                 if is_model_cache_claimed(model):
                     if debug:
                         debug.log(
@@ -112,14 +104,6 @@ class GlobalModelCache:
         with self._model_cache_lock:
             if node_id in self._vae_models:
                 model, stored_config = self._vae_models[node_id]
-                if not is_model_cache_cold(model):
-                    if debug:
-                        debug.log(
-                            f"Cached VAE is still hot or incomplete; waiting for cold cache state before reuse (node {node_id})",
-                            category="cache",
-                            force=True,
-                        )
-                    return None
                 if is_model_cache_claimed(model):
                     if debug:
                         debug.log(

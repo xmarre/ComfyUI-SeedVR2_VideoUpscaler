@@ -452,6 +452,8 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
 
             runner._seedvr2_execution_active = True
             runner._seedvr2_runner_tainted = False
+            runner._seedvr2_dit_phase_cleaned = False
+            runner._seedvr2_vae_phase_cleaned = False
 
             # If both models were already cached but the runner template had been
             # invalidated or missing, cache this freshly configured runner now.

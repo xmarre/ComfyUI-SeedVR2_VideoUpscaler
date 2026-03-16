@@ -984,6 +984,8 @@ def _process_frames_core(
 
         runner._seedvr2_execution_active = True
         runner._seedvr2_runner_tainted = False
+        runner._seedvr2_dit_phase_cleaned = False
+        runner._seedvr2_vae_phase_cleaned = False
 
         if (
             cache_context is not None
