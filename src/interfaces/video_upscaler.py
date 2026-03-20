@@ -23,7 +23,10 @@ from ..core.generation_utils import (
     load_text_embeddings,
     script_directory
 )
-from ..core.model_configuration import _evict_claimed_cached_models
+from ..core.model_configuration import (
+    _evict_claimed_cached_models,
+    _finalize_claimed_cached_models_for_reuse,
+)
 from ..optimization.memory_manager import (
     cleanup_text_embeddings,
     complete_cleanup,
@@ -322,18 +325,41 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
             
             # Use complete_cleanup for all cleanup operations
             if runner:
+                claimed_dit = cache_context.get('cached_dit') if cache_context is not None else None
+                claimed_vae = cache_context.get('cached_vae') if cache_context is not None else None
+                refreshed_dit = None
+                refreshed_vae = None
                 try:
-                    complete_cleanup(
-                        runner=runner,
-                        debug=debug,
-                        dit_cache=dit_cache,
-                        vae_cache=vae_cache,
-                    )
-                    if dit_cache and getattr(runner, 'dit', None) is not None:
-                        set_model_cache_claimed_state(runner.dit, False)
-                    if vae_cache and getattr(runner, 'vae', None) is not None:
-                        set_model_cache_claimed_state(runner.vae, False)
+                    try:
+                        complete_cleanup(
+                            runner=runner,
+                            debug=debug,
+                            dit_cache=dit_cache,
+                            vae_cache=vae_cache,
+                        )
+                        if dit_cache or vae_cache:
+                            refreshed_dit, refreshed_vae = _finalize_claimed_cached_models_for_reuse(cache_context, runner, debug)
+                    except Exception:
+                        try:
+                            _evict_claimed_cached_models(cache_context, runner, debug)
+                        except Exception as evict_error:
+                            if debug is not None:
+                                debug.log(
+                                    f"Failed to evict claimed cached models while handling prior cleanup/finalize exception: {evict_error}",
+                                    level="WARNING",
+                                    category="cleanup",
+                                    force=True,
+                                )
+                        raise
                 finally:
+                    if dit_cache and claimed_dit is not None:
+                        set_model_cache_claimed_state(claimed_dit, False)
+                    if dit_cache and refreshed_dit is not None and refreshed_dit is not claimed_dit:
+                        set_model_cache_claimed_state(refreshed_dit, False)
+                    if vae_cache and claimed_vae is not None:
+                        set_model_cache_claimed_state(claimed_vae, False)
+                    if vae_cache and refreshed_vae is not None and refreshed_vae is not claimed_vae:
+                        set_model_cache_claimed_state(refreshed_vae, False)
                     runner._seedvr2_execution_active = False
                 
                 # Delete runner only if neither model is cached
@@ -613,35 +639,41 @@ class SeedVR2VideoUpscaler(io.ComfyNode):
             return io.NodeOutput(sample)
             
         except BaseException:
-            if runner is not None:
-                runner._seedvr2_runner_tainted = True
-
+            claimed_dit = cache_context.get('cached_dit') if cache_context is not None else None
+            claimed_vae = cache_context.get('cached_vae') if cache_context is not None else None
             if cache_context is not None:
                 _evict_claimed_cached_models(cache_context, runner, debug)
+                if runner is not None and cache_context.get('reusing_runner', False):
+                    try:
+                        cache_context['global_cache'].taint_and_remove_runner(
+                            cache_context.get('dit_id'),
+                            cache_context.get('vae_id'),
+                            debug,
+                            expected_runner=runner,
+                        )
+                    except Exception as cache_error:
+                        if debug is not None:
+                            debug.log(
+                                f"Failed to evict cached runner while handling prior exception: {cache_error}",
+                                level="WARNING",
+                                category="cleanup",
+                                force=True,
+                            )
+
+            try:
                 try:
-                    cache_context['global_cache'].remove_runner(
-                        cache_context.get('dit_id'),
-                        cache_context.get('vae_id'),
-                        debug,
-                        expected_runner=runner,
-                    )
-                except Exception as cache_error:
+                    cleanup(dit_cache=False, vae_cache=False)
+                except BaseException as cleanup_error:
                     if debug is not None:
                         debug.log(
-                            f"Failed to evict cached runner while handling prior exception: {cache_error}",
+                            f"Cleanup failed while handling prior exception: {cleanup_error}",
                             level="WARNING",
                             category="cleanup",
                             force=True,
                         )
-
-            try:
-                cleanup(dit_cache=False, vae_cache=False)
-            except BaseException as cleanup_error:
-                if debug is not None:
-                    debug.log(
-                        f"Cleanup failed while handling prior exception: {cleanup_error}",
-                        level="WARNING",
-                        category="cleanup",
-                        force=True,
-                    )
+            finally:
+                if claimed_dit is not None:
+                    set_model_cache_claimed_state(claimed_dit, False)
+                if claimed_vae is not None:
+                    set_model_cache_claimed_state(claimed_vae, False)
             raise

@@ -7,7 +7,6 @@ import threading
 from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 from ..optimization.memory_manager import (
     is_model_cache_claimed,
-    is_model_cache_cold,
     iter_model_wrapper_chain,
     release_model_memory,
     set_model_cache_claimed_state,
@@ -269,7 +268,7 @@ class GlobalModelCache:
         debug: Optional['Debug'] = None,
         expected_model: Optional[Any] = None,
     ) -> bool:
-        """Rewrite a cached DiT entry to a normalized canonical model."""
+        """Rewrite a cached DiT entry to the latest claimed model object."""
         node_id = dit_config.get('node_id')
         with self._model_cache_lock:
             if node_id not in self._dit_models:
@@ -288,7 +287,7 @@ class GlobalModelCache:
 
             self._dit_models[node_id] = (model, stored_config)
         if debug:
-            debug.log(f"Rewrote cached DiT entry to cold canonical model (node {node_id})", category="cache", force=True)
+            debug.log(f"Refreshed cached DiT entry to the latest claimed model object (node {node_id})", category="cache", force=True)
         return True
 
     def replace_vae(
@@ -298,7 +297,7 @@ class GlobalModelCache:
         debug: Optional['Debug'] = None,
         expected_model: Optional[Any] = None,
     ) -> bool:
-        """Rewrite a cached VAE entry to a normalized canonical model."""
+        """Rewrite a cached VAE entry to the latest claimed model object."""
         node_id = vae_config.get('node_id')
         with self._model_cache_lock:
             if node_id not in self._vae_models:
@@ -317,7 +316,7 @@ class GlobalModelCache:
 
             self._vae_models[node_id] = (model, stored_config)
         if debug:
-            debug.log(f"Rewrote cached VAE entry to cold canonical model (node {node_id})", category="cache", force=True)
+            debug.log(f"Refreshed cached VAE entry to the latest claimed model object (node {node_id})", category="cache", force=True)
         return True
     
     def set_runner(self, dit_id: Optional[int], vae_id: Optional[int],
@@ -388,6 +387,39 @@ class GlobalModelCache:
             del self._runner_templates[runner_key]
         if debug:
             debug.log(f"Removed cached runner template: nodes {runner_key}", category="cache", force=True)
+        return True
+
+    def taint_and_remove_runner(self,
+                                dit_id: Optional[int],
+                                vae_id: Optional[int],
+                                debug: Optional['Debug'] = None,
+                                expected_runner: Optional[Any] = None) -> bool:
+        """Atomically mark a cached runner template tainted/inactive and remove it."""
+        if dit_id is None or vae_id is None:
+            return False
+
+        runner_key = f"{dit_id}+{vae_id}"
+        with self._runner_templates_lock:
+            cached_runner = self._runner_templates.get(runner_key)
+            if cached_runner is None:
+                return False
+
+            if expected_runner is not None and cached_runner is not expected_runner:
+                if debug:
+                    debug.log(
+                        f"Skipped taint+remove for cached runner nodes {runner_key}: cache entry no longer matches expected runner",
+                        level="WARNING",
+                        category="cache",
+                        force=True,
+                    )
+                return False
+
+            cached_runner._seedvr2_runner_tainted = True
+            cached_runner._seedvr2_execution_active = False
+            del self._runner_templates[runner_key]
+
+        if debug:
+            debug.log(f"Tainted and removed cached runner template: nodes {runner_key}", category="cache", force=True)
         return True
     
     def remove_dit(

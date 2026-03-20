@@ -748,9 +748,29 @@ def _acquire_runner(
             return _create_new_runner(dit_model, vae_model, base_cache_dir, debug)
 
         if template_status == "claimed":
-            debug.log(f"Reusing cached runner template: nodes {runner_key}", category="reuse", force=True)
-            cache_context['reusing_runner'] = True
-            return template
+            need_dit = bool(cache_context.get('dit_cache') and cache_context.get('dit_id') is not None)
+            need_vae = bool(cache_context.get('vae_cache') and cache_context.get('vae_id') is not None)
+            have_dit = (not need_dit) or (cache_context.get('cached_dit') is not None)
+            have_vae = (not need_vae) or (cache_context.get('cached_vae') is not None)
+
+            if have_dit and have_vae:
+                debug.log(f"Reusing cached runner template: nodes {runner_key}", category="reuse", force=True)
+                cache_context['reusing_runner'] = True
+                return template
+
+            debug.log(
+                "Runner template matched, but required claimed cached models were not acquired; creating a fresh runner",
+                level="WARNING",
+                category="cache",
+                force=True,
+            )
+            cache_context['global_cache'].taint_and_remove_runner(
+                cache_context['dit_id'],
+                cache_context['vae_id'],
+                debug,
+                expected_runner=template,
+            )
+            return _create_new_runner(dit_model, vae_model, base_cache_dir, debug)
 
         current_dit = getattr(template, '_dit_model_name', None)
         current_vae = getattr(template, '_vae_model_name', None)
@@ -927,10 +947,8 @@ def configure_runner(
     except BaseException:
         _evict_claimed_cached_models(cache_context, runner, debug)
         if runner is not None and cache_context.get('reusing_runner', False):
-            runner._seedvr2_runner_tainted = True
-            runner._seedvr2_execution_active = False
             try:
-                cache_context['global_cache'].remove_runner(
+                cache_context['global_cache'].taint_and_remove_runner(
                     cache_context.get('dit_id'),
                     cache_context.get('vae_id'),
                     debug,
@@ -968,15 +986,66 @@ def _evict_claimed_cached_models(
     if global_cache is None:
         return
 
+    claimed_dit = cache_context.get('cached_dit')
+    claimed_vae = cache_context.get('cached_vae')
+
     dit_id = cache_context.get('dit_id')
-    if cache_context.get('dit_cache') and dit_id is not None:
-        expected_dit = (getattr(runner, 'dit', None) if runner is not None else None) or cache_context.get('cached_dit')
-        global_cache.remove_dit({'node_id': dit_id}, debug, expected_model=expected_dit)
+    if cache_context.get('dit_cache') and dit_id is not None and claimed_dit is not None:
+        global_cache.remove_dit({'node_id': dit_id}, debug, expected_model=claimed_dit)
 
     vae_id = cache_context.get('vae_id')
-    if cache_context.get('vae_cache') and vae_id is not None:
-        expected_vae = (getattr(runner, 'vae', None) if runner is not None else None) or cache_context.get('cached_vae')
-        global_cache.remove_vae({'node_id': vae_id}, debug, expected_model=expected_vae)
+    if cache_context.get('vae_cache') and vae_id is not None and claimed_vae is not None:
+        global_cache.remove_vae({'node_id': vae_id}, debug, expected_model=claimed_vae)
+
+
+def _finalize_claimed_cached_models_for_reuse(
+    cache_context: Dict[str, Any],
+    runner: Optional[VideoDiffusionInfer],
+    debug: Optional['Debug'] = None,
+) -> Tuple[Optional[Any], Optional[Any]]:
+    """Refresh or evict claimed cache entries using the released runner-held model refs."""
+    refreshed_dit = None
+    refreshed_vae = None
+
+    if not cache_context or runner is None:
+        return refreshed_dit, refreshed_vae
+
+    global_cache = cache_context.get('global_cache')
+    if global_cache is None:
+        return refreshed_dit, refreshed_vae
+
+    claimed_dit = cache_context.get('cached_dit')
+    claimed_vae = cache_context.get('cached_vae')
+
+    dit_id = cache_context.get('dit_id')
+    if cache_context.get('dit_cache') and dit_id is not None and claimed_dit is not None:
+        released_dit = getattr(runner, 'dit', None)
+        if released_dit is not None:
+            if global_cache.replace_dit({'node_id': dit_id}, released_dit, debug, expected_model=claimed_dit):
+                refreshed_dit = released_dit
+                runner.dit = released_dit
+            else:
+                global_cache.remove_dit({'node_id': dit_id}, debug, expected_model=claimed_dit)
+                runner.dit = None
+        else:
+            global_cache.remove_dit({'node_id': dit_id}, debug, expected_model=claimed_dit)
+            runner.dit = None
+
+    vae_id = cache_context.get('vae_id')
+    if cache_context.get('vae_cache') and vae_id is not None and claimed_vae is not None:
+        released_vae = getattr(runner, 'vae', None)
+        if released_vae is not None:
+            if global_cache.replace_vae({'node_id': vae_id}, released_vae, debug, expected_model=claimed_vae):
+                refreshed_vae = released_vae
+                runner.vae = released_vae
+            else:
+                global_cache.remove_vae({'node_id': vae_id}, debug, expected_model=claimed_vae)
+                runner.vae = None
+        else:
+            global_cache.remove_vae({'node_id': vae_id}, debug, expected_model=claimed_vae)
+            runner.vae = None
+
+    return refreshed_dit, refreshed_vae
 
 
 def _configure_runner_settings(
