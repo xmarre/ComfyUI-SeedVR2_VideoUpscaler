@@ -106,16 +106,44 @@ def setup_video_transform(ctx: Dict[str, Any], resolution: int, max_resolution: 
     
     if existing_transform is not None:
         debug.log("SeedVR2 breadcrumb: setup_video_transform using existing transform", category="setup", force=True) if debug else None
-        # Transform exists - check if we need to compute dimensions
-        if 'true_target_dims' in ctx and sample_frame is not None:
-            # Return cached dimensions + recompute padded from sample
-            debug.log("SeedVR2 breadcrumb: before existing_transform(sample_frame)", category="setup", force=True) if debug else None
+        # Transform exists - return cached dimensions without re-running the pipeline
+        if 'true_target_dims' in ctx and 'padded_target_dims' in ctx:
             true_h, true_w = ctx['true_target_dims']
-            transformed = existing_transform(sample_frame)
-            debug.log("SeedVR2 breadcrumb: after existing_transform(sample_frame)", category="setup", force=True) if debug else None
-            padded_h, padded_w = transformed.shape[-2:]
+            padded_h, padded_w = ctx['padded_target_dims']
             if debug:
                 debug.log("Reusing pre-initialized video transformation pipeline", category="reuse")
+            return true_h, true_w, padded_h, padded_w
+        if sample_frame is not None:
+            temp_transform = Compose([
+                NaResize(resolution=resolution, mode="side", downsample_only=False, max_resolution=max_resolution),
+                Lambda(lambda x: torch.clamp(x, 0.0, 1.0))
+            ])
+            debug.log("SeedVR2 breadcrumb: before temp_transform(sample_frame)", category="setup", force=True) if debug else None
+            resized_sample = temp_transform(sample_frame)
+            debug.log("SeedVR2 breadcrumb: after temp_transform(sample_frame)", category="setup", force=True) if debug else None
+            resized_h, resized_w = resized_sample.shape[-2:]
+
+            # Round to even numbers for video codec compatibility (libx264 requirement)
+            true_h = (resized_h // 2) * 2
+            true_w = (resized_w // 2) * 2
+
+            # Cache for later use in trimming
+            ctx['true_target_dims'] = (true_h, true_w)
+
+            # Compute padded dimensions from the resized shape before even-rounding
+            padded_h = ((resized_h + 15) // 16) * 16
+            padded_w = ((resized_w + 15) // 16) * 16
+            ctx['padded_target_dims'] = (padded_h, padded_w)
+
+            if debug:
+                if true_h == padded_h and true_w == padded_w:
+                    debug.log(f"Target dimensions: {true_w}x{true_h} (no padding needed)",
+                             category="setup", indent_level=1)
+                else:
+                    debug.log(f"Target dimensions: {true_w}x{true_h} (padded to {padded_w}x{padded_h} for processing)",
+                             category="setup", indent_level=1)
+
+            del temp_transform, resized_sample
             return true_h, true_w, padded_h, padded_w
         elif debug:
             debug.log("Reusing pre-initialized video transformation pipeline", category="reuse")
@@ -135,20 +163,19 @@ def setup_video_transform(ctx: Dict[str, Any], resolution: int, max_resolution: 
         debug.log("SeedVR2 breadcrumb: before temp_transform(sample_frame)", category="setup", force=True) if debug else None
         resized_sample = temp_transform(sample_frame)
         debug.log("SeedVR2 breadcrumb: after temp_transform(sample_frame)", category="setup", force=True) if debug else None
-        true_h, true_w = resized_sample.shape[-2:]
+        resized_h, resized_w = resized_sample.shape[-2:]
         
         # Round to even numbers for video codec compatibility (libx264 requirement)
-        true_h = (true_h // 2) * 2
-        true_w = (true_w // 2) * 2
+        true_h = (resized_h // 2) * 2
+        true_w = (resized_w // 2) * 2
         
         # Cache for later use in trimming
         ctx['true_target_dims'] = (true_h, true_w)
-        
-        # Get padded dimensions
-        debug.log("SeedVR2 breadcrumb: before ctx['video_transform'](sample_frame)", category="setup", force=True) if debug else None
-        transformed_sample = ctx['video_transform'](sample_frame)
-        debug.log("SeedVR2 breadcrumb: after ctx['video_transform'](sample_frame)", category="setup", force=True) if debug else None
-        padded_h, padded_w = transformed_sample.shape[-2:]
+
+        # Compute padded dimensions from the resized shape before even-rounding
+        padded_h = ((resized_h + 15) // 16) * 16
+        padded_w = ((resized_w + 15) // 16) * 16
+        ctx['padded_target_dims'] = (padded_h, padded_w)
         
         if debug:
             if true_h == padded_h and true_w == padded_w:
@@ -158,7 +185,7 @@ def setup_video_transform(ctx: Dict[str, Any], resolution: int, max_resolution: 
                 debug.log(f"Target dimensions: {true_w}x{true_h} (padded to {padded_w}x{padded_h} for processing)", 
                          category="setup", indent_level=1)
         
-        del temp_transform, resized_sample, transformed_sample
+        del temp_transform, resized_sample
         return true_h, true_w, padded_h, padded_w
     
     return 0, 0, 0, 0

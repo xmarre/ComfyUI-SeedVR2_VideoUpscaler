@@ -1487,6 +1487,8 @@ def postprocess_all_batches(
             del ctx['all_ori_lengths']
         if 'true_target_dims' in ctx:
             del ctx['true_target_dims']
+        if 'padded_target_dims' in ctx:
+            del ctx['padded_target_dims']
         if 'batch_metadata' in ctx:
             del ctx['batch_metadata']
         if 'input_images' in ctx:
